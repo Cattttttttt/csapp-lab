@@ -4,12 +4,12 @@ FROM gcc:11.2
 RUN apt update && \
     apt upgrade -y
 
-# SSH Inital
+# SSH Initial
 RUN apt install -y openssh-server && \
     mkdir /run/sshd
 
 # Dev Dependencies
-RUN apt install -y gdb
+RUN apt install -y gdb valgrind man-db python3 python
 
 # Files
 COPY authorized_keys /root/.ssh/authorized_keys
