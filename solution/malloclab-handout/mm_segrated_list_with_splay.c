@@ -1,5 +1,3 @@
-/* Global splay */
-
 /*
  * mm-naive.c - The fastest, least memory-efficient malloc package.
  * 
@@ -45,8 +43,10 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
+#define MAXLIST 20
+
 static const int DEBUG = 0;
-static void* tree;  // point to size block
+static void* segList[MAXLIST];  // point to size block
 static const int MinimalBlockSize = 20; // 5 words
 
 static int min(int a, int b) {
@@ -55,6 +55,14 @@ static int min(int a, int b) {
 
 static int max(int a, int b) {
   return a > b ? a : b;
+}
+
+static int getSegIndex(int size) {
+  if(size < MinimalBlockSize) return -1;
+  for(int i = 0; i < MAXLIST; i++) {
+    if(size < (1 << (i + 4))) return i;
+  }
+  return 9;
 }
 
 static int getTopSize(void *block) {
@@ -121,7 +129,7 @@ static int id(void *node) {
   return -1;
 }
 
-static void rotate(void *node) {
+static void rotate(void *node, int rootIndex) {
   if(node == NULL) return;
   int res = id(node);
   if(res == -1) return;
@@ -136,56 +144,56 @@ static void rotate(void *node) {
     int _res = id(father);
     *(size_t **)getChildPtr(getFather(father), _res) = node;
   } else {
-    tree = node;
+    segList[rootIndex] = node;
   }
   *(size_t **)getFatherPtr(father) = node;
 }
 
-static void splay(void *node) {
+static void splay(void *node, int rootIndex) {
   if(node == NULL) return;
   while(getFather(node) != NULL) {
     void *father = getFather(node);
     if(getFather(father) == NULL) {
-      rotate(node);
+      rotate(node, rootIndex);
       continue;
     }
     if(id(node) == id(father)) {
-      rotate(father);
-      rotate(node);
+      rotate(father, rootIndex);
+      rotate(node, rootIndex);
       continue;
     }
     if(id(node) != id(father)) {
-      rotate(node);
-      rotate(node);
+      rotate(node, rootIndex);
+      rotate(node, rootIndex);
       continue;
     }
     break;
   }
 }
 
-static void insert(void *node) {
-  if(tree == NULL) {
-    tree = node;
+static void insert(void *node, int rootIndex) {
+  if(segList[rootIndex] == NULL) {
+    segList[rootIndex] = node;
     return;
   }
-  void *cur = tree;
+  void *cur = segList[rootIndex];
   while(cur != NULL) {
     int res = compare(cur, node);
     if(getChild(cur, res) == NULL) {
       *(size_t **)getFatherPtr(node) = cur;
       *(size_t **)getChildPtr(cur, res) = node;
-      splay(node);
+      splay(node, rootIndex);
       break;
     }
     cur = getChild(cur, res);
   }
 }
 
-static void *find(int length) {
-  void *cur = tree;
+static void *find(int length, int rootIndex) {
+  void *cur = segList[rootIndex];
   while(cur != NULL) {
     if(getTopSize(cur) == length) {
-      splay(cur);
+      splay(cur, rootIndex);
       return cur;
     }
     cur = getChild(cur, compareInt(cur, length));
@@ -193,13 +201,13 @@ static void *find(int length) {
   return NULL;
 }
 
-static void *findLarger(int length) {
+static void *findLarger(int length, int rootIndex) {
   length += MinimalBlockSize;
-  void *cur = tree;
+  void *cur = segList[rootIndex];
   while(cur != NULL) {
     void *left = getChild(cur, 0);
     if(getTopSize(cur) == length - MinimalBlockSize) {
-      splay(cur);
+      splay(cur, rootIndex);
       return cur;
     }
     if(getTopSize(cur) < length) {
@@ -208,7 +216,7 @@ static void *findLarger(int length) {
       if(left != NULL && getTopSize(left) >= length) {
         cur = left;
       } else {
-        splay(cur);
+        splay(cur, rootIndex);
         return cur;
       }
     }
@@ -216,23 +224,23 @@ static void *findLarger(int length) {
   return NULL;
 }
 
-static void delete(void *block) {
-  splay(block);
+static void delete(void *block, int rootIndex) {
+  splay(block, rootIndex);
   if(getChild(block, 0) == NULL) {
-    tree = getChild(block, 1);
-    if(tree != NULL)
-      *(size_t **)getFatherPtr(tree) = NULL;
+    segList[rootIndex] = getChild(block, 1);
+    if(segList[rootIndex] != NULL)
+      *(size_t **)getFatherPtr(segList[rootIndex]) = NULL;
     return;
   }
   if(getChild(block, 1) == NULL) {
-    tree = getChild(block, 0);
-    *(size_t **)getFatherPtr(tree) = NULL;
+    segList[rootIndex] = getChild(block, 0);
+    *(size_t **)getFatherPtr(segList[rootIndex]) = NULL;
     return;
   }
   void *cur = getChild(block, 0);
   void *right = getChild(block, 1);
   while(getChild(cur, 1) != NULL) cur = getChild(cur, 1);
-  splay(cur);
+  splay(cur, rootIndex);
   *(size_t **)getChildPtr(cur, 1) = right;
   *(size_t **)getFatherPtr(right) = cur;
 }
@@ -245,19 +253,27 @@ static void *getAreaStartPtr(void *block) {
 }
 
 static void *getBlockPtrFromSegList(int size) {
-  void *cur = find(size);
-  if(cur == NULL) cur = findLarger(size);
+  int index = getSegIndex(size);
+  void *cur = find(size, index);
+  if(cur == NULL) {
+    for(int i = MAXLIST - 1; i >= index; i--) {
+      cur = findLarger(size, i);
+      if(cur != NULL) break;
+    }
+  }
   return cur;
 }
 
 static void addBlockToList(void *block) {
   size_t blockSize = getTopSize(block);
-  insert(block);
+  int blockIndex = getSegIndex(blockSize);
+  insert(block, blockIndex);
 }
 
 static void removeBlockFromList(void *block) {
   size_t blockSize = getTopSize(block);
-  delete(block);
+  int blockIndex = getSegIndex(blockSize);
+  delete(block, blockIndex);
 }
 
 static void setBlockToFree(void *block, size_t size) {
@@ -375,12 +391,27 @@ static void printBlockInfo(void *block, int source, int print) {
   }
 }
 
+static void printTree(void *block) {
+  if(block == NULL) {
+    for(int i = 0; i < MAXLIST; i++) {
+      if(segList[i] == NULL) continue;
+      printTree(segList[i]);
+      fprintf(stdout, "\n");
+    }
+    fprintf(stdout, "\n");
+    return;
+  }
+  if(getChild(block, 0) != NULL) printTree(getChild(block, 0));
+  printBlockInfo(block, 0, 0);
+  if(getChild(block, 1) != NULL) printTree(getChild(block, 1));
+}
+
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {
-  tree = NULL;
+  for(int i = 0; i < MAXLIST; i++) segList[i] = NULL;
   mem_sbrk(ALIGN(8));
   *(size_t *)mem_heap_lo() = 1;
   *((size_t *)mem_heap_lo() + 1) = 1;
